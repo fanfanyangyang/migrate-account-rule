@@ -28,73 +28,104 @@ func main() {
 
 	// 检查scr、gcs中的账号规则
 	pass := service.CheckOldPriv(key, appWhere, exclude)
+	notPassTips := "some check not pass"
+	passTips := "all check pass"
 	if mode == "check" {
-		slog.Error("some check not pass")
+		if !pass {
+			slog.Error(notPassTips)
+		} else {
+			slog.Info(passTips)
+		}
 		return
-	} else if mode == "run" && !pass {
-		slog.Error("some check not pass, do not migrate")
-		return
+	} else if mode == "run" {
+		if !pass {
+			slog.Error(fmt.Sprintf("%s, do not migrate", notPassTips))
+			return
+		} else {
+			slog.Info(passTips)
+		}
 	} else if mode == "force-run" {
-		slog.Warn("some check not pass, but force migrate")
-		slog.Warn("user can not be migrated", "users", exclude)
+		if !pass {
+			slog.Warn(fmt.Sprintf("%s, but force run", notPassTips))
+			slog.Warn("user can not be migrated", "users", exclude)
+		} else {
+			slog.Info(passTips)
+		}
 	}
 
 	// 获取需要迁移的scr、gcs中的账号规则
-	need, uids, err := service.FilterMigratePriv(appWhere, exclude)
+	// db_module为spider_master/spider_slave属于spider的权限规则，
+	// 其他不明确的，同时迁移到mysql和spider下
+	mysqlUids, uids, err := service.FilterMigratePriv(appWhere, exclude)
 	if err != nil {
 		slog.Error("FilterMigratePriv", "err", err)
 		return
 	}
 
-	// 获取需要迁移的权限规则
-	// db_module为spider_master/spider_slave属于spider的权限规则，
-	// 其他不明确的，同时迁移到mysql和spider下
-	spiderUsers, users, err := service.GetUsers(key, uids)
+	// 获取需要迁移的权限账号
+	mysqlUsers, err := service.GetUsers(key, mysqlUids)
+	if err != nil {
+		slog.Error("GetUsers", "err", err)
+		return
+	}
+
+	allUsers, err := service.GetUsers(key, uids)
 	if err != nil {
 		slog.Error("GetUsers", "err", err)
 		return
 	}
 
 	// 迁移账号
-	err = service.DoAddAccounts(apps, spiderUsers, tendbcluster)
+	err = service.DoAddAccounts(apps, allUsers, tendbcluster)
 	if err != nil {
 		slog.Error("DoAddAccounts", err)
 		return
 	}
-	err = service.DoAddAccounts(apps, users, mysql)
-	if err != nil {
-		slog.Error("DoAddAccounts", err)
-		return
-	}
-	err = service.DoAddAccounts(apps, users, tendbcluster)
+	err = service.DoAddAccounts(apps, mysqlUsers, mysql)
 	if err != nil {
 		slog.Error("DoAddAccounts", err)
 		return
 	}
 
+	// 获取需要迁移的规则
+	mysqlRules, err := service.GetRules(mysqlUids)
+	if err != nil {
+		slog.Error("GetRules", "err", err)
+		return
+	}
+
+	allRules, err := service.GetRules(uids)
+	if err != nil {
+		slog.Error("GetRules", "err", err)
+		return
+	}
+	slog.Info("migrate account success")
+
 	// 迁移账号规则
-	for _, rule := range need {
+	for _, rule := range mysqlRules {
 		priv, errInner := service.FormatPriv(rule.Privileges)
 		if errInner != nil {
 			slog.Error("format privileges", rule.Privileges, errInner)
 			continue
 		}
-		if rule.DbModule == "spider_master" || rule.DbModule == "spider_slave" {
-			errInner = service.DoAddAccountRule(rule, apps, "tendbcluster", priv)
-			if errInner != nil {
-				slog.Error("AddAccountAndRule error", rule, errInner)
-			}
-		} else {
-			errInner = service.DoAddAccountRule(rule, apps, "mysql", priv)
-			if errInner != nil {
-				slog.Error("AddAccountAndRule error", rule, errInner)
-			}
-			errInner = service.DoAddAccountRule(rule, apps, "tendbcluster", priv)
-			if errInner != nil {
-				slog.Error("AddAccountAndRule error", rule, errInner)
-			}
+		errInner = service.DoAddAccountRule(rule, apps, "mysql", priv)
+		if errInner != nil {
+			slog.Error("AddAccountAndRule error", rule, errInner)
 		}
 	}
+
+	for _, rule := range allRules {
+		priv, errInner := service.FormatPriv(rule.Privileges)
+		if errInner != nil {
+			slog.Error("format privileges", rule.Privileges, errInner)
+			continue
+		}
+		errInner = service.DoAddAccountRule(rule, apps, "tendbcluster", priv)
+		if errInner != nil {
+			slog.Error("AddAccountAndRule error", rule, errInner)
+		}
+	}
+	slog.Info("migrate account rule success")
 }
 
 func GetConfigFromEnv() (map[string]int64, string, string) {

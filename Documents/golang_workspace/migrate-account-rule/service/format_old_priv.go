@@ -8,16 +8,16 @@ import (
 	"strings"
 )
 
-func FilterMigratePriv(appWhere string, exclude []AppUser) ([]*PrivModule, []string, error) {
+func FilterMigratePriv(appWhere string, exclude []AppUser) ([]string, []string, error) {
 	all := make([]*PrivModule, 0)
-	need := make([]*PrivModule, 0)
 	uids := make([]string, 0)
-	vsql := fmt.Sprintf("select uid,app,db_module,module,user,dbname,psw,privileges "+
+	mysqlUids := make([]string, 0)
+	vsql := fmt.Sprintf("select uid,app,db_module,user "+
 		" from tb_app_priv_module where app in (%s);", appWhere)
 	err := util.DB.Self.Debug().Raw(vsql).Scan(&all).Error
 	if err != nil {
 		slog.Error(vsql, "execute error", err)
-		return need, uids, err
+		return mysqlUids, uids, err
 	}
 
 	for _, module := range all {
@@ -29,38 +29,43 @@ func FilterMigratePriv(appWhere string, exclude []AppUser) ([]*PrivModule, []str
 			}
 		}
 		if excludeFlag == false {
-			need = append(need, module)
-			uids = append(uids, strconv.FormatInt(module.Uid, 10))
+			suid := strconv.FormatInt(module.Uid, 10)
+			uids = append(uids, suid)
+			if module.DbModule != "spider_master" && module.DbModule != "spider_slave" {
+				mysqlUids = append(mysqlUids, suid)
+			}
 		}
 	}
 	if len(uids) == 0 {
 		slog.Warn("no rule should be migrated")
 	}
-	return need, uids, err
+	return mysqlUids, uids, err
 }
 
-func GetUsers(key string, uids []string) ([]*PrivModule, []*PrivModule, error) {
-	spiderUsers := make([]*PrivModule, 0)
+func GetUsers(key string, uids []string) ([]*PrivModule, error) {
 	users := make([]*PrivModule, 0)
-
 	vsql := fmt.Sprintf("select distinct app,user,AES_DECRYPT(psw,'%s') as psw"+
-		" from tb_app_priv_module where uid in (%s) and db_module in ('spider_master','spider_slave');",
+		" from tb_app_priv_module where uid in (%s);",
 		key, strings.Join(uids, ","))
-	err := util.DB.Self.Debug().Raw(vsql).Scan(&spiderUsers).Error
+	err := util.DB.Self.Debug().Raw(vsql).Scan(&users).Error
 	if err != nil {
 		slog.Error(vsql, "execute error", err)
-		return spiderUsers, users, err
+		return users, err
 	}
 	// todo 8.0解析出的密码是16进制的
-	vsql = fmt.Sprintf("select distinct app,user,AES_DECRYPT(psw,'%s') as psw"+
-		" from tb_app_priv_module where uid in (%s) and db_module not in ('spider_master','spider_slave');",
-		key, strings.Join(uids, ","))
-	err = util.DB.Self.Debug().Raw(vsql).Scan(&users).Error
+	return users, nil
+}
+
+func GetRules(uids []string) ([]*PrivModule, error) {
+	users := make([]*PrivModule, 0)
+	vsql := fmt.Sprintf("select distinct app,user,privileges,dbname "+
+		" from tb_app_priv_module where uid in (%s);", strings.Join(uids, ","))
+	err := util.DB.Self.Debug().Raw(vsql).Scan(&users).Error
 	if err != nil {
 		slog.Error(vsql, "execute error", err)
-		return spiderUsers, users, err
+		return users, err
 	}
-	return spiderUsers, users, nil
+	return users, nil
 }
 
 // FormatPriv
@@ -72,7 +77,8 @@ func FormatPriv(source string) (map[string]string, error) {
 	}
 	source = strings.ToLower(source)
 	privs := strings.Split(source, ",")
-	var dml, ddl, global, all []string
+	var dml, ddl, global []string
+	var allPrivileges bool
 	for _, p := range privs {
 		p = strings.TrimPrefix(p, " ")
 		p = strings.TrimSuffix(p, " ")
@@ -84,20 +90,23 @@ func FormatPriv(source string) (map[string]string, error) {
 			p == "replication client" || p == "replication slave" {
 			global = append(global, p)
 		} else if p == "all privileges" {
-			all = append(all, p)
+			global = append(global, p)
+			allPrivileges = true
 		} else {
 			return target, fmt.Errorf("privilege: %s not allowed", p)
 		}
 	}
+	if allPrivileges && (len(global) > 1 || len(dml) > 0 || len(ddl) > 0) {
+		return target, fmt.Errorf("[all privileges] should not be granted with others")
+	}
 	target["dml"] = strings.Join(dml, ",")
 	target["ddl"] = strings.Join(ddl, ",")
 	target["global"] = strings.Join(global, ",")
-	target["all"] = strings.Join(all, ",")
 	return target, nil
 }
 
 func DoAddAccounts(apps map[string]int64, users []*PrivModule, clusterType string) error {
-	testpsw := "l7BmcNiE48aMvTLzCkI6nJiCh8TYSxHOLtSqIdRFFv13bS6gCsjt8dYysn4uoawtkxhVlm1PezQbUYtdWRvschahFjcWMhCPnju/SJ9oh1ET6FkIgg2cSFCa7zVJsubuHZbQEj2W2xqDhp+CRUhd5a7hGxsupmWoE8408pfTitg="
+	testpsw := "xbhESrkOF+ZSKjqHTzvB3KtnQs97oD5hDvfWxt4RksqYfnR/dr2UF3c27hGXJuTBvX4OUSa8FlpuTSuP0ekesASVmIY9LXrILwaRL9hSeFpNAWYJd34b7G372z8EOGjLeQB8FPvOV/2XuVZJd8br3dOsAmVoxwlfRvVrVNqmCAI="
 	for _, user := range users {
 		account := AccountPara{BkBizId: apps[user.App], User: user.User,
 			//	Psw: user.Psw, Operator: "migrate", ClusterType: &tendbcluster}
@@ -112,14 +121,12 @@ func DoAddAccounts(apps map[string]int64, users []*PrivModule, clusterType strin
 }
 
 func DoAddAccountRule(rule *PrivModule, apps map[string]int64, clusterType string, priv map[string]string) error {
-
-	/* todo id, err := GetAccount(AccountPara{BkBizId: apps[rule.App], User: rule.User, ClusterType: &clusterType})
+	id, err := GetAccount(AccountPara{BkBizId: apps[rule.App], User: rule.User, ClusterType: &clusterType})
 	if err != nil {
 		return fmt.Errorf("add rule failed when get account: %s", err.Error())
 	}
-
-	*/
-	err := AddAccountRule(AccountRulePara{BkBizId: apps[rule.App], ClusterType: &clusterType, AccountId: 23,
+	//23
+	err = AddAccountRule(AccountRulePara{BkBizId: apps[rule.App], ClusterType: &clusterType, AccountId: id,
 		Dbname: rule.Dbname, Priv: priv, Operator: "migrate"})
 	if err != nil {
 		return fmt.Errorf("add rule failed: %s", err.Error())

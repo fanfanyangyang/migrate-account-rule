@@ -11,7 +11,8 @@ func CheckOldPriv(key, appWhere string, exclude []AppUser) bool {
 	err1 := CheckDifferentPasswordsForOneUser(key, appWhere, exclude)
 	err2 := CheckEmptyPassword(key, appWhere, exclude)
 	err3 := CheckDifferentPrivileges(appWhere, exclude)
-	if err1 != nil || err2 != nil || err3 != nil {
+	err4 := CheckPrivilegesFormat(appWhere, exclude)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
 		return false
 	}
 	return true
@@ -82,8 +83,8 @@ func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
 	count := make([]*Count, 0)
 	err := util.DB.Self.Debug().Raw(vsql).Scan(&count).Error
 	if err != nil {
-		return err
 		slog.Error(vsql, "execute error", err)
+		return err
 	}
 	check := make([]string, 0)
 	for _, distinct := range count {
@@ -102,6 +103,40 @@ func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
 		return fmt.Errorf("different privileges")
 	} else {
 		slog.Info("[ check 3 Success ]")
+	}
+	return nil
+}
+
+func CheckPrivilegesFormat(appWhere string, exclude []AppUser) error {
+	UniqMap := make(map[string]struct{})
+	privPass := true
+	slog.Info("check 4: check privileges")
+	vsql := fmt.Sprintf("select uid,app,user,privileges "+
+		" from tb_app_priv_module where app in (%s)", appWhere)
+	rules := make([]*PrivModule, 0)
+	err := util.DB.Self.Debug().Raw(vsql).Scan(&rules).Error
+	if err != nil {
+		slog.Error(vsql, "execute error", err)
+		return err
+	}
+	for _, rule := range rules {
+		_, err = FormatPriv(rule.Privileges)
+		if err != nil {
+			privPass = false
+			slog.Error("msg", "uid", rule.Uid, "app", rule.App, "user", rule.User, "privileges", rule.Privileges, "error", err)
+		}
+		s := fmt.Sprintf("%s|%s", rule.App, rule.User)
+		if _, isExists := UniqMap[s]; isExists == true {
+			continue
+		}
+		UniqMap[s] = struct{}{}
+		exclude = append(exclude, AppUser{rule.App, rule.User})
+	}
+	if !privPass {
+		slog.Error("[ check 4 Fail ]")
+		return fmt.Errorf("wrong privileges")
+	} else {
+		slog.Info("[ check 4 Success ]")
 	}
 	return nil
 }
