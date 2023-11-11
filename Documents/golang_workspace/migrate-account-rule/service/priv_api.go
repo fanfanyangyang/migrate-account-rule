@@ -53,3 +53,32 @@ func AddAccountRule(rule AccountRulePara) error {
 	return nil
 
 }
+
+func DoAddAccounts(apps map[string]int64, users []*PrivModule, clusterType string) error {
+	testpsw := "xbhESrkOF+ZSKjqHTzvB3KtnQs97oD5hDvfWxt4RksqYfnR/dr2UF3c27hGXJuTBvX4OUSa8FlpuTSuP0ekesASVmIY9LXrILwaRL9hSeFpNAWYJd34b7G372z8EOGjLeQB8FPvOV/2XuVZJd8br3dOsAmVoxwlfRvVrVNqmCAI="
+	for _, user := range users {
+		account := AccountPara{BkBizId: apps[user.App], User: user.User,
+			//	Psw: user.Psw, Operator: "migrate", ClusterType: &tendbcluster}
+			Psw: testpsw, Operator: "migrate", ClusterType: &clusterType}
+		err := AddAccount(account)
+		if err != nil {
+			slog.Error("add account error", account, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func DoAddAccountRule(rule *PrivModule, apps map[string]int64, clusterType string, priv map[string]string) error {
+	id, err := GetAccount(AccountPara{BkBizId: apps[rule.App], User: rule.User, ClusterType: &clusterType})
+	if err != nil {
+		return fmt.Errorf("add rule failed when get account: %s", err.Error())
+	}
+	//23
+	err = AddAccountRule(AccountRulePara{BkBizId: apps[rule.App], ClusterType: &clusterType, AccountId: id,
+		Dbname: rule.Dbname, Priv: priv, Operator: "migrate"})
+	if err != nil {
+		return fmt.Errorf("add rule failed: %s", err.Error())
+	}
+	return nil
+}
