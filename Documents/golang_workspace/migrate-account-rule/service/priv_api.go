@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/spf13/viper"
@@ -55,11 +56,10 @@ func AddAccountRule(rule AccountRulePara) error {
 }
 
 func DoAddAccounts(apps map[string]int64, users []*PrivModule, clusterType string) error {
-	testpsw := "xbhESrkOF+ZSKjqHTzvB3KtnQs97oD5hDvfWxt4RksqYfnR/dr2UF3c27hGXJuTBvX4OUSa8FlpuTSuP0ekesASVmIY9LXrILwaRL9hSeFpNAWYJd34b7G372z8EOGjLeQB8FPvOV/2XuVZJd8br3dOsAmVoxwlfRvVrVNqmCAI="
 	for _, user := range users {
+		psw := base64.StdEncoding.EncodeToString([]byte(user.Psw))
 		account := AccountPara{BkBizId: apps[user.App], User: user.User,
-			//	Psw: user.Psw, Operator: "migrate", ClusterType: &tendbcluster}
-			Psw: testpsw, Operator: "migrate", ClusterType: &clusterType}
+			Psw: psw, Operator: "migrate", ClusterType: &clusterType, MigrateFlag: true}
 		err := AddAccount(account)
 		if err != nil {
 			slog.Error("add account error", account, err)
@@ -74,7 +74,6 @@ func DoAddAccountRule(rule *PrivModule, apps map[string]int64, clusterType strin
 	if err != nil {
 		return fmt.Errorf("add rule failed when get account: %s", err.Error())
 	}
-	//23
 	err = AddAccountRule(AccountRulePara{BkBizId: apps[rule.App], ClusterType: &clusterType, AccountId: id,
 		Dbname: rule.Dbname, Priv: priv, Operator: "migrate"})
 	if err != nil {

@@ -10,9 +10,10 @@ import (
 func CheckOldPriv(key, appWhere string, exclude []AppUser) bool {
 	err1 := CheckDifferentPasswordsForOneUser(key, appWhere, exclude)
 	err2 := CheckEmptyPassword(key, appWhere, exclude)
-	err3 := CheckDifferentPrivileges(appWhere, exclude)
-	err4 := CheckPrivilegesFormat(appWhere, exclude)
-	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+	err3 := CheckPasswordConsistentWithUser(key, appWhere, exclude)
+	err4 := CheckDifferentPrivileges(appWhere, exclude)
+	err5 := CheckPrivilegesFormat(appWhere, exclude)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 		return false
 	}
 	return true
@@ -51,10 +52,31 @@ func CheckDifferentPasswordsForOneUser(key, appWhere string, exclude []AppUser) 
 }
 
 func CheckEmptyPassword(key, appWhere string, exclude []AppUser) error {
-	slog.Info("check 2: empty password")
-	nopsw := make([]*PrivModule, 0)
 	vsql := fmt.Sprintf("select distinct app,user "+
 		" from tb_app_priv_module where app in (%s) and psw=AES_ENCRYPT('','%s');", appWhere, key)
+	slog.Info("check 2: empty password")
+	err := CheckPassword(vsql, exclude, 2)
+	if err != nil {
+		slog.Error("CheckPassword", "error", err)
+		return err
+	}
+	return nil
+}
+
+func CheckPasswordConsistentWithUser(key, appWhere string, exclude []AppUser) error {
+	vsql := fmt.Sprintf("select distinct app,user "+
+		" from tb_app_priv_module where app in (%s) and user=AES_DECRYPT(psw,'%s');", appWhere, key)
+	slog.Info("check 3: password consistent with user")
+	err := CheckPassword(vsql, exclude, 3)
+	if err != nil {
+		slog.Error("CheckPassword", "error", err)
+		return err
+	}
+	return nil
+}
+
+func CheckPassword(vsql string, exclude []AppUser, round int) error {
+	nopsw := make([]*PrivModule, 0)
 	err := util.DB.Self.Debug().Raw(vsql).Scan(&nopsw).Error
 	if err != nil {
 		slog.Error(vsql, "execute error", err)
@@ -68,16 +90,16 @@ func CheckEmptyPassword(key, appWhere string, exclude []AppUser) error {
 		}
 		msg = fmt.Sprintf("app:    user: \n%s", msg)
 		slog.Error(msg)
-		slog.Error("[ check 2 Fail ]")
-		return fmt.Errorf("empty password")
+		slog.Error(fmt.Sprintf("[ check %d Fail ]", round))
+		return fmt.Errorf("password check fail")
 	} else {
-		slog.Info("[ check 2 Success ]")
+		slog.Info(fmt.Sprintf("[ check %d Success ]", round))
 	}
 	return nil
 }
 
 func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
-	slog.Info("check 3: different privileges for [app user dbname]")
+	slog.Info("check 4: different privileges for [app user dbname]")
 	vsql := fmt.Sprintf("select app,user,dbname,count(distinct(privileges)) as cnt "+
 		" from tb_app_priv_module where app in (%s) group by app,user,dbname order by 1,2,3", appWhere)
 	count := make([]*Count, 0)
@@ -99,10 +121,10 @@ func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
 		msg := "app:    user:     dbname:     different_privileges_count:"
 		msg = fmt.Sprintf("\n%s\n%s", msg, strings.Join(check, "\n"))
 		slog.Error(msg)
-		slog.Error("[ check 3 Fail ]")
+		slog.Error("[ check 4 Fail ]")
 		return fmt.Errorf("different privileges")
 	} else {
-		slog.Info("[ check 3 Success ]")
+		slog.Info("[ check 4 Success ]")
 	}
 	return nil
 }
@@ -110,7 +132,7 @@ func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
 func CheckPrivilegesFormat(appWhere string, exclude []AppUser) error {
 	UniqMap := make(map[string]struct{})
 	privPass := true
-	slog.Info("check 4: check privileges")
+	slog.Info("check 5: check privileges")
 	vsql := fmt.Sprintf("select uid,app,user,privileges "+
 		" from tb_app_priv_module where app in (%s)", appWhere)
 	rules := make([]*PrivModule, 0)
@@ -133,10 +155,10 @@ func CheckPrivilegesFormat(appWhere string, exclude []AppUser) error {
 		exclude = append(exclude, AppUser{rule.App, rule.User})
 	}
 	if !privPass {
-		slog.Error("[ check 4 Fail ]")
+		slog.Error("[ check 5 Fail ]")
 		return fmt.Errorf("wrong privileges")
 	} else {
-		slog.Info("[ check 4 Success ]")
+		slog.Info("[ check 5 Success ]")
 	}
 	return nil
 }

@@ -33,6 +33,7 @@ type AccountPara struct {
 	Psw         string  `json:"psw"`
 	Operator    string  `json:"operator"`
 	ClusterType *string `json:"cluster_type" `
+	MigrateFlag bool    `json:"migrate_flag"`
 }
 
 // AccountRulePara AddAccountRule、ModifyAccountRule、ParaPreCheck函数的入参
