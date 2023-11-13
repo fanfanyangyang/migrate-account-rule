@@ -76,19 +76,18 @@ func CheckPasswordConsistentWithUser(key, appWhere string, exclude []AppUser) er
 }
 
 func CheckPassword(vsql string, exclude []AppUser, round int) error {
-	nopsw := make([]*PrivModule, 0)
-	err := util.DB.Self.Debug().Raw(vsql).Scan(&nopsw).Error
+	psw := make([]*PrivModule, 0)
+	err := util.DB.Self.Debug().Raw(vsql).Scan(&psw).Error
 	if err != nil {
 		slog.Error(vsql, "execute error", err)
 		return err
 	}
-	if len(nopsw) > 0 {
-		msg := ""
-		for _, user := range nopsw {
+	if len(psw) > 0 {
+		msg := fmt.Sprintf("app:    user: ")
+		for _, user := range psw {
 			exclude = append(exclude, AppUser{user.App, user.User})
-			msg = fmt.Sprintf("%s    %s", user.App, user.User)
+			msg = fmt.Sprintf("%s\n%s    %s", msg, user.App, user.User)
 		}
-		msg = fmt.Sprintf("app:    user: \n%s", msg)
 		slog.Error(msg)
 		slog.Error(fmt.Sprintf("[ check %d Fail ]", round))
 		return fmt.Errorf("password check fail")
@@ -132,7 +131,7 @@ func CheckDifferentPrivileges(appWhere string, exclude []AppUser) error {
 func CheckPrivilegesFormat(appWhere string, exclude []AppUser) error {
 	UniqMap := make(map[string]struct{})
 	privPass := true
-	slog.Info("check 5: check privileges")
+	slog.Info("check 5: check privileges format")
 	vsql := fmt.Sprintf("select uid,app,user,privileges "+
 		" from tb_app_priv_module where app in (%s)", appWhere)
 	rules := make([]*PrivModule, 0)
